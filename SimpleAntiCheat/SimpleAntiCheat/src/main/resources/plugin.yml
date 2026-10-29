@@ -1,0 +1,10 @@
+name: SimpleAntiCheat
+version: 0.1.0
+main: me.anticheat.AntiCheatPlugin
+api-version: '1.21'
+description: Home-made anti-cheat (movement + combat), alerts only.
+
+permissions:
+  anticheat.alerts:
+    description: Receive anti-cheat flag alerts in chat
+    default: op
