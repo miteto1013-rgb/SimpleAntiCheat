@@ -65,6 +65,16 @@ public class FreezeManager implements Listener {
         }, seconds * 20L + 1);
     }
 
+    /** Ends a freeze early. Returns true if the player was actually frozen. */
+    public boolean unfreeze(Player player) {
+        boolean wasFrozen = isFrozen(player);
+        frozenUntil.remove(player.getUniqueId());
+        if (wasFrozen) {
+            player.sendMessage(Component.text("You have been unfrozen.", NamedTextColor.GREEN));
+        }
+        return wasFrozen;
+    }
+
     // ------------------------------------------------------------------
     // What a frozen player can't do
     // ------------------------------------------------------------------
