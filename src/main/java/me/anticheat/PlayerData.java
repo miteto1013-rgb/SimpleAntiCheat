@@ -19,7 +19,11 @@ public class PlayerData {
     public int lastIceTick = -1000;
     public double lastHorizontal = -1;      // -1 = unknown (no previous move yet)
     public boolean lastOnGround = true;
+    public boolean groundBeforeLast = true;   // was the previous tick started on the ground?
     public int jesusTicks;
+    public final Deque<double[]> speedSamples = new ArrayDeque<>();   // {tick, horizontal distance}
+    public int speedWindowStart = -1;
+    public int lastAvgEval = -1000;
 
     // ---------- combat state ----------
     public final Deque<Integer> swingTicks = new ArrayDeque<>();

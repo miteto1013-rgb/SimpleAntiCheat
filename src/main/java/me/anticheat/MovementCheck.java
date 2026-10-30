@@ -54,7 +54,12 @@ public class MovementCheck implements Listener {
     private static final double SPRINT_GROUND_ACCEL = 0.13;
     private static final double SPRINT_AIR_ACCEL = 0.026;
     private static final double SPRINT_JUMP_BOOST = 0.2;
-    private static final double SPEED_TOLERANCE = 0.035;
+    private static final double SPEED_TOLERANCE = 0.05;
+
+    // Average speed over a window: sustained sprint-jumping averages ~0.36 b/tick (7.2 blocks/sec).
+    private static final int AVG_WINDOW_TICKS = 40;
+    private static final int AVG_EVAL_EVERY_TICKS = 10;
+    private static final double MAX_AVERAGE_SPEED = 0.40;
 
     // ---- other ----
     private static final double MAX_STEP = 0.6 + 0.05;
@@ -120,6 +125,7 @@ public class MovementCheck implements Listener {
         boolean onGround = isOnGround(to);
         boolean startedOnGround = data.lastOnGround;
         double lastHorizontal = data.lastHorizontal;
+        boolean groundBeforeLast = data.groundBeforeLast;
 
         // Remember surfaces that break the normal rules for a while.
         Material below = to.clone().subtract(0, 0.5, 0).getBlock().getType();
@@ -139,6 +145,8 @@ public class MovementCheck implements Listener {
         }
 
         if (exempt || inWater || odd) {
+            data.speedSamples.clear();      // can't judge speed here, so restart the average-speed window
+            data.speedWindowStart = -1;
             remember(data, dy, horizontal, onGround);
             data.airTicks = onGround ? 0 : 5;      // 5 = "already airborne", skips the first-tick jump check
             return;
@@ -187,29 +195,38 @@ public class MovementCheck implements Listener {
         }
 
         // ---------------- SPEED ----------------
-        // Instead of one fixed speed limit, work out the fastest vanilla physics COULD have produced
-        // this tick from last tick's speed. That also catches bunny-hop, strafe and long-jump speed.
         boolean slippery = tick - data.lastIceTick < 20;   // ice and soul speed make you faster, skip them
-        if (lastHorizontal >= 0 && !slippery) {
+        if (slippery) {
+            data.speedSamples.clear();
+            data.speedWindowStart = -1;
+        } else {
             double multiplier = player.getWalkSpeed() / 0.2;
             PotionEffect speedEffect = player.getPotionEffect(PotionEffectType.SPEED);
             if (speedEffect != null) {
                 multiplier *= 1.0 + 0.2 * (speedEffect.getAmplifier() + 1);
             }
 
-            double friction = startedOnGround ? GROUND_FRICTION : AIR_FRICTION;
-            double accel = (startedOnGround ? SPRINT_GROUND_ACCEL : SPRINT_AIR_ACCEL) * multiplier;
-            double maxSpeed = lastHorizontal * friction + accel;
-            if (startedOnGround && !onGround) maxSpeed += SPRINT_JUMP_BOOST;   // the jump tick
+            // (A) Per tick: the fastest speed vanilla physics COULD have produced from last tick's speed.
+            //     Last tick's movement is slowed by friction depending on whether that tick STARTED on the
+            //     ground; this tick's acceleration depends on whether THIS tick starts on the ground.
+            if (lastHorizontal >= 0) {
+                double friction = groundBeforeLast ? GROUND_FRICTION : AIR_FRICTION;
+                double accel = (startedOnGround ? SPRINT_GROUND_ACCEL : SPRINT_AIR_ACCEL) * multiplier;
+                double maxSpeed = lastHorizontal * friction + accel;
+                if (startedOnGround && !onGround) maxSpeed += SPRINT_JUMP_BOOST;   // the jump tick
 
-            if (horizontal > maxSpeed + SPEED_TOLERANCE) {
-                if (data.addBuffer("speed", 1.0) > 2.0) {
-                    plugin.flag(player, "Speed",
-                            String.format("%.3f b/tick, max %.3f", horizontal, maxSpeed + SPEED_TOLERANCE));
+                if (horizontal > maxSpeed + SPEED_TOLERANCE) {
+                    if (data.addBuffer("speed", 1.0) > 2.0) {
+                        plugin.flag(player, "Speed",
+                                String.format("%.3f b/tick, max %.3f", horizontal, maxSpeed + SPEED_TOLERANCE));
+                    }
+                } else {
+                    data.addBuffer("speed", -0.05);   // decays slowly so repeated small overshoots still add up
                 }
-            } else {
-                data.addBuffer("speed", -0.5);
             }
+
+            // (B) Average over the last 2 seconds: catches steady speed and Timer-style cheats.
+            checkAverageSpeed(player, data, tick, horizontal, multiplier);
         }
 
         remember(data, dy, horizontal, onGround);
@@ -281,6 +298,43 @@ public class MovementCheck implements Listener {
         }
     }
 
+    /**
+     * Average horizontal speed per server tick over the last 2 seconds of uninterrupted movement.
+     * Vanilla can't sustain more than ~0.36 b/tick even bunny-hopping, so a higher average means
+     * speed hacks. Because it's measured per SERVER tick, a client that sends movement packets
+     * faster than 20 per second (Timer) shows up here too.
+     */
+    private void checkAverageSpeed(Player player, PlayerData data, int tick, double horizontal, double multiplier) {
+        if (data.speedWindowStart < 0) data.speedWindowStart = tick;
+
+        data.speedSamples.addLast(new double[]{tick, horizontal});
+        while (!data.speedSamples.isEmpty() && tick - data.speedSamples.peekFirst()[0] >= AVG_WINDOW_TICKS) {
+            data.speedSamples.pollFirst();
+        }
+
+        // Only judge after a full window of movement we could actually check, and only every few ticks.
+        if (tick - data.speedWindowStart < AVG_WINDOW_TICKS) return;
+        if (tick - data.lastAvgEval < AVG_EVAL_EVERY_TICKS) return;
+        data.lastAvgEval = tick;
+
+        // Server lag makes players look faster per server tick, so don't judge while it's lagging.
+        if (Bukkit.getTPS()[0] < 19.0) return;
+
+        double sum = 0;
+        for (double[] sample : data.speedSamples) sum += sample[1];
+        double average = sum / AVG_WINDOW_TICKS;
+        double limit = MAX_AVERAGE_SPEED * multiplier;
+
+        if (average > limit) {
+            if (data.addBuffer("speedavg", 1.0) > 2.0) {
+                plugin.flag(player, "Speed",
+                        String.format("average %.3f b/tick over 2s, max %.3f", average, limit));
+            }
+        } else {
+            data.addBuffer("speedavg", -1.0);
+        }
+    }
+
     // ------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------
@@ -288,6 +342,7 @@ public class MovementCheck implements Listener {
     private void remember(PlayerData data, double dy, double horizontal, boolean onGround) {
         data.lastDy = dy;
         data.lastHorizontal = horizontal;
+        data.groundBeforeLast = data.lastOnGround;
         data.lastOnGround = onGround;
     }
 
