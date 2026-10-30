@@ -374,13 +374,18 @@ public class MovementCheck implements Listener {
     }
 
     /**
-     * Server-side ground check: is there collision in a thin slab directly under the
+     * Server-side ground check: is there collision in a very thin slab directly under the
      * player's feet (player hitbox is 0.6 wide)? Uses real block collision shapes, so
      * stairs, slabs, fences, carpets and so on all behave correctly.
+     *
+     * The slab is deliberately razor thin (3/1000 of a block). Vanilla only counts you as
+     * "on the ground" when your feet are exactly on the surface. A thicker slab would say
+     * "on ground" while you're still a few hundredths of a block above it, which throws off
+     * the friction maths in the speed check every time you drop down a step or stairs.
      */
     private boolean isOnGround(Location loc) {
         double x = loc.getX(), y = loc.getY(), z = loc.getZ();
-        return overlapsSolid(loc.getWorld(), new BoundingBox(x - 0.3, y - 0.1, z - 0.3, x + 0.3, y, z + 0.3));
+        return overlapsSolid(loc.getWorld(), new BoundingBox(x - 0.3, y - 0.003, z - 0.3, x + 0.3, y, z + 0.3));
     }
 
     /** True if the box overlaps the real collision shape of any block. */
