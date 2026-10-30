@@ -1,6 +1,7 @@
 package me.anticheat;
 
 import org.bukkit.Bukkit;
+import org.bukkit.FluidCollisionMode;
 import org.bukkit.GameMode;
 import org.bukkit.Location;
 import org.bukkit.Material;
@@ -20,30 +21,44 @@ import org.bukkit.event.player.PlayerVelocityEvent;
 import org.bukkit.potion.PotionEffect;
 import org.bukkit.potion.PotionEffectType;
 import org.bukkit.util.BoundingBox;
+import org.bukkit.util.RayTraceResult;
+import org.bukkit.util.Vector;
 
 import java.util.EnumSet;
 import java.util.Set;
 
 /**
  * Movement checks, all driven by PlayerMoveEvent:
- *  - Fly:   in the air, you can only follow vanilla gravity (dy = (lastDy - 0.08) * 0.98)
- *           and a jump can only lift you 0.42 blocks on the first tick.
- *  - Speed: horizontal distance per move must stay under what vanilla can produce.
+ *  - Fly:   in the air you must follow vanilla gravity (also catches glide, spider, jetpack, high jump).
+ *  - Speed: horizontal speed must be reachable with vanilla physics (friction + acceleration).
+ *           This catches bunny-hop / strafe / long-jump speed cheats, not just blatant ones.
+ *  - Jesus: staying at a constant height on top of water without swimming.
+ *  - Step:  climbing more than 0.6 blocks in one step while on the ground.
+ *  - Phase: standing inside solid blocks, or moving through them (no-clip).
  *
- * Limitation: PlayerMoveEvent only fires when the client sends a changed position/rotation,
- * so this is a good first version, not a bulletproof one (see notes in the chat reply).
+ * Limitation: PlayerMoveEvent only fires when the client sends a changed position/rotation.
+ * Cheats that need raw packet timing (Timer, NoSlow...) need a packet library.
  */
 public class MovementCheck implements Listener {
 
-    // Vanilla physics constants (blocks per tick)
+    // ---- vertical physics (blocks per tick) ----
     private static final double GRAVITY = 0.08;
     private static final double DRAG = 0.98;
     private static final double MAX_JUMP_DY = 0.42 + 0.05;
     private static final double GRAVITY_TOLERANCE = 0.03;
 
-    // Sprint-jumping peaks around 0.5 b/tick; sprinting on flat ground is ~0.29 b/tick.
-    private static final double MAX_SPEED_AIR = 0.62;
-    private static final double MAX_SPEED_GROUND = 0.34;
+    // ---- horizontal physics (blocks per tick) ----
+    // Each tick: velocity = lastVelocity * friction + acceleration (+ a 0.2 kick on the jump tick).
+    private static final double GROUND_FRICTION = 0.546;      // 0.6 block slipperiness * 0.91
+    private static final double AIR_FRICTION = 0.91;
+    private static final double SPRINT_GROUND_ACCEL = 0.13;
+    private static final double SPRINT_AIR_ACCEL = 0.026;
+    private static final double SPRINT_JUMP_BOOST = 0.2;
+    private static final double SPEED_TOLERANCE = 0.035;
+
+    // ---- other ----
+    private static final double MAX_STEP = 0.6 + 0.05;
+    private static final int JESUS_TICKS = 8;
 
     /** Blocks that change movement rules, so we don't judge players inside/on them. */
     private static final Set<Material> ODD_BLOCKS = EnumSet.of(
@@ -103,25 +118,36 @@ public class MovementCheck implements Listener {
         // NOTE: we work out "on ground" ourselves from the world. The client's own
         // onGround flag is exactly what cheaters spoof, so we never trust it.
         boolean onGround = isOnGround(to);
+        boolean startedOnGround = data.lastOnGround;
+        double lastHorizontal = data.lastHorizontal;
 
         // Remember surfaces that break the normal rules for a while.
         Material below = to.clone().subtract(0, 0.5, 0).getBlock().getType();
-        if (Tag.ICE.isTagged(below)) data.lastIceTick = tick;
+        if (Tag.ICE.isTagged(below) || below == Material.SOUL_SAND || below == Material.SOUL_SOIL) {
+            data.lastIceTick = tick;   // slippery or speed-boosting surfaces
+        }
         if (below == Material.SLIME_BLOCK || Tag.BEDS.isTagged(below)) data.exemptFor(tick, 40); // bouncy
 
-        if (isExempt(player, data, tick) || inOddBlock(to)) {
-            data.lastDy = dy;
+        boolean exempt = isExempt(player, data, tick);
+        boolean inWater = player.isInWater();
+        boolean odd = inOddBlock(to);
+
+        // ---------------- JESUS + PHASE (run even next to water, so they sit before the early return) ----------------
+        if (!exempt) {
+            checkJesus(player, data, to, onGround, dy, horizontal, inWater);
+            if (!odd) checkPhase(player, data, from, to);
+        }
+
+        if (exempt || inWater || odd) {
+            remember(data, dy, horizontal, onGround);
             data.airTicks = onGround ? 0 : 5;      // 5 = "already airborne", skips the first-tick jump check
-            data.groundTicks = onGround ? data.groundTicks + 1 : 0;
             return;
         }
 
         // ---------------- FLY ----------------
         if (onGround) {
             data.airTicks = 0;
-            data.groundTicks++;
         } else {
-            data.groundTicks = 0;
             data.airTicks++;
 
             boolean violation = false;
@@ -150,40 +176,127 @@ public class MovementCheck implements Listener {
             }
         }
 
+        // ---------------- STEP ----------------
+        // Vanilla players step up at most 0.6 blocks. Anything bigger while staying on the ground is step hacks.
+        if (startedOnGround && onGround && dy > MAX_STEP) {
+            if (data.addBuffer("step", 1.0) > 1.0) {
+                plugin.flag(player, "Step", String.format("stepped up %.2f blocks", dy));
+            }
+        } else {
+            data.addBuffer("step", -0.25);
+        }
+
         // ---------------- SPEED ----------------
-        boolean slippery = tick - data.lastIceTick < 20;   // ice makes you much faster, skip it
-        if (!slippery) {
+        // Instead of one fixed speed limit, work out the fastest vanilla physics COULD have produced
+        // this tick from last tick's speed. That also catches bunny-hop, strafe and long-jump speed.
+        boolean slippery = tick - data.lastIceTick < 20;   // ice and soul speed make you faster, skip them
+        if (lastHorizontal >= 0 && !slippery) {
             double multiplier = player.getWalkSpeed() / 0.2;
             PotionEffect speedEffect = player.getPotionEffect(PotionEffectType.SPEED);
             if (speedEffect != null) {
                 multiplier *= 1.0 + 0.2 * (speedEffect.getAmplifier() + 1);
             }
 
-            // After a few ticks on the ground, momentum from jumping is gone, so be stricter.
-            double limit = (data.groundTicks >= 5 ? MAX_SPEED_GROUND : MAX_SPEED_AIR) * multiplier;
+            double friction = startedOnGround ? GROUND_FRICTION : AIR_FRICTION;
+            double accel = (startedOnGround ? SPRINT_GROUND_ACCEL : SPRINT_AIR_ACCEL) * multiplier;
+            double maxSpeed = lastHorizontal * friction + accel;
+            if (startedOnGround && !onGround) maxSpeed += SPRINT_JUMP_BOOST;   // the jump tick
 
-            if (horizontal > limit) {
-                if (data.addBuffer("speed", 1.0) > 3.0) {
-                    plugin.flag(player, "Speed", String.format("%.3f b/tick max=%.3f", horizontal, limit));
+            if (horizontal > maxSpeed + SPEED_TOLERANCE) {
+                if (data.addBuffer("speed", 1.0) > 2.0) {
+                    plugin.flag(player, "Speed",
+                            String.format("%.3f b/tick, max %.3f", horizontal, maxSpeed + SPEED_TOLERANCE));
                 }
             } else {
-                data.addBuffer("speed", -0.25);
+                data.addBuffer("speed", -0.5);
             }
         }
 
-        data.lastDy = dy;
+        remember(data, dy, horizontal, onGround);
+    }
+
+    // ------------------------------------------------------------------
+    // Individual checks
+    // ------------------------------------------------------------------
+
+    /**
+     * Jesus: standing/walking on top of water. The player isn't swimming (not "in water"),
+     * has nothing solid under them, yet stays at a constant height right above a water block.
+     * Anyone legitimately in that spot would sink and start swimming within a tick or two.
+     */
+    private void checkJesus(Player player, PlayerData data, Location to, boolean onGround,
+                            double dy, double horizontal, boolean inWater) {
+        boolean suspicious = false;
+        if (!onGround && !inWater && Math.abs(dy) < 0.03 && horizontal > 0.05) {
+            Block under = to.getWorld().getBlockAt(
+                    to.getBlockX(), floor(to.getY() - 0.3), to.getBlockZ());
+            suspicious = under.getType() == Material.WATER;
+        }
+
+        if (suspicious) {
+            data.jesusTicks++;
+            if (data.jesusTicks >= JESUS_TICKS) {
+                plugin.flag(player, "Jesus",
+                        String.format("on water for %d ticks (dy=%.3f)", data.jesusTicks, dy));
+            }
+        } else {
+            data.jesusTicks = 0;
+        }
+    }
+
+    /**
+     * Phase / no-clip on foot: the player's hitbox must never overlap solid blocks, and the
+     * straight path they just took must not cross one.
+     */
+    private void checkPhase(Player player, PlayerData data, Location from, Location to) {
+        World world = to.getWorld();
+        String info = null;
+
+        double half = 0.25;   // the player is 0.6 wide; shrink a little so touching a wall isn't "inside" it
+        double height = player.getHeight();
+        BoundingBox box = new BoundingBox(
+                to.getX() - half, to.getY() + 0.05, to.getZ() - half,
+                to.getX() + half, to.getY() + height - 0.05, to.getZ() + half);
+
+        if (overlapsSolid(world, box)) {
+            info = String.format("inside blocks at %.1f %.1f %.1f", to.getX(), to.getY(), to.getZ());
+        } else {
+            Vector path = to.toVector().subtract(from.toVector());
+            double distance = path.length();
+            if (distance > 0.05 && world.isChunkLoaded(from.getBlockX() >> 4, from.getBlockZ() >> 4)) {
+                Location start = from.clone().add(0, height / 2.0, 0);
+                RayTraceResult hit = world.rayTraceBlocks(
+                        start, path.normalize(), distance, FluidCollisionMode.NEVER, true);
+                if (hit != null && hit.getHitBlock() != null) {
+                    info = String.format("moved through %s (%.2f blocks)",
+                            hit.getHitBlock().getType().name().toLowerCase(), distance);
+                }
+            }
+        }
+
+        if (info != null) {
+            if (data.addBuffer("phase", 1.0) > 1.5) plugin.flag(player, "Phase", info);
+        } else {
+            data.addBuffer("phase", -0.5);
+        }
     }
 
     // ------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------
 
+    private void remember(PlayerData data, double dy, double horizontal, boolean onGround) {
+        data.lastDy = dy;
+        data.lastHorizontal = horizontal;
+        data.lastOnGround = onGround;
+    }
+
     /** Situations where vanilla rules differ and we'd rather not judge the player. */
     private boolean isExempt(Player p, PlayerData data, int tick) {
         GameMode gm = p.getGameMode();
         return gm == GameMode.CREATIVE || gm == GameMode.SPECTATOR
                 || p.getAllowFlight() || p.isFlying() || p.isGliding() || p.isRiptiding()
-                || p.isInsideVehicle() || p.isDead() || p.isInWater()
+                || p.isInsideVehicle() || p.isDead()
                 || tick < data.exemptUntilTick
                 || p.hasPotionEffect(PotionEffectType.LEVITATION)
                 || p.hasPotionEffect(PotionEffectType.SLOW_FALLING)
@@ -211,18 +324,19 @@ public class MovementCheck implements Listener {
      * stairs, slabs, fences, carpets and so on all behave correctly.
      */
     private boolean isOnGround(Location loc) {
-        World world = loc.getWorld();
         double x = loc.getX(), y = loc.getY(), z = loc.getZ();
-        BoundingBox probe = new BoundingBox(x - 0.3, y - 0.1, z - 0.3, x + 0.3, y, z + 0.3);
+        return overlapsSolid(loc.getWorld(), new BoundingBox(x - 0.3, y - 0.1, z - 0.3, x + 0.3, y, z + 0.3));
+    }
 
-        for (int bx = floor(probe.getMinX()); bx <= floor(probe.getMaxX()); bx++) {
-            for (int by = floor(probe.getMinY()); by <= floor(probe.getMaxY()); by++) {
-                for (int bz = floor(probe.getMinZ()); bz <= floor(probe.getMaxZ()); bz++) {
+    /** True if the box overlaps the real collision shape of any block. */
+    private boolean overlapsSolid(World world, BoundingBox box) {
+        for (int bx = floor(box.getMinX()); bx <= floor(box.getMaxX()); bx++) {
+            for (int by = floor(box.getMinY()); by <= floor(box.getMaxY()); by++) {
+                for (int bz = floor(box.getMinZ()); bz <= floor(box.getMaxZ()); bz++) {
                     if (!world.isChunkLoaded(bx >> 4, bz >> 4)) continue;
                     Block block = world.getBlockAt(bx, by, bz);
-                    // Collision shapes are relative to the block, so shift the probe to match.
-                    BoundingBox relative = probe.clone().shift(-bx, -by, -bz);
-                    if (block.getCollisionShape().overlaps(relative)) return true;
+                    // Collision shapes are relative to the block, so shift the box to match.
+                    if (block.getCollisionShape().overlaps(box.clone().shift(-bx, -by, -bz))) return true;
                 }
             }
         }

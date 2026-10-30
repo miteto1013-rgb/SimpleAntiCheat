@@ -17,6 +17,9 @@ public class PlayerData {
     public int groundTicks;
     public int exemptUntilTick;
     public int lastIceTick = -1000;
+    public double lastHorizontal = -1;      // -1 = unknown (no previous move yet)
+    public boolean lastOnGround = true;
+    public int jesusTicks;
 
     // ---------- combat state ----------
     public final Deque<Integer> swingTicks = new ArrayDeque<>();
