@@ -1,13 +1,13 @@
 name: SimpleAntiCheat
-version: 0.2.0
+version: 0.3.0
 main: me.anticheat.AntiCheatPlugin
 api-version: '1.21'
-description: Home-made anti-cheat (movement, combat, boats, totems).
+description: Home-made anti-cheat (movement, combat, boats, totems, x-ray).
 
 commands:
   ac:
     description: Anti-cheat commands
-    usage: /ac <alerts|freeze|unfreeze>
+    usage: /ac <alerts|strikes>
     aliases: [anticheat]
 
 permissions:
@@ -15,5 +15,5 @@ permissions:
     description: Receive anti-cheat flag alerts in chat and use /ac alerts
     default: op
   anticheat.admin:
-    description: Freeze and unfreeze players with /ac
+    description: View a player's strikes with /ac strikes
     default: op
