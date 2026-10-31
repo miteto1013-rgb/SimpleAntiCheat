@@ -10,6 +10,7 @@ import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.plugin.java.JavaPlugin;
 
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
@@ -36,12 +37,10 @@ public class AntiCheatPlugin extends JavaPlugin implements Listener {
     // Automatic bans. Designed so one glitch can never get anyone banned.
     // ------------------------------------------------------------------
 
-    /**
-     * Master switch. false = alerts only: nobody is ever banned.
-     * Leave this OFF until you've played for a while and never seen "strike 3/5" or worse on normal play.
-     * Then change it to true.
-     */
-    private static final boolean BAN_ENABLED = false;
+    /** Master switch. false = alerts only: nobody is ever banned. */
+    private static final boolean BAN_ENABLED = true;
+    /** How long an automatic ban lasts. It lifts by itself; /pardon <name> in the console lifts it early. */
+    private static final int BAN_DAYS = 7;
     /** A player is banned once they have this many strikes on the SAME check. */
     private static final int STRIKES_TO_BAN = 5;
     /** A check can give a player at most one strike per this many seconds. */
@@ -191,19 +190,25 @@ public class AntiCheatPlugin extends JavaPlugin implements Listener {
         if (!bannedNow.add(player.getUniqueId())) return;   // already being banned
 
         String reason = "Cheating detected (" + check + ")";
-        getLogger().warning("Banning " + player.getName() + " - " + reason + " - " + info);
+        getLogger().warning("Banning " + player.getName() + " for " + BAN_DAYS + " days - " + reason + " - " + info);
 
         Component notice = Component.text("[AC] ", NamedTextColor.RED)
-                .append(Component.text(player.getName() + " was banned for " + check + ".", NamedTextColor.GOLD));
+                .append(Component.text(player.getName() + " was banned for " + BAN_DAYS + " days (" + check + ").",
+                        NamedTextColor.GOLD));
         for (Player online : Bukkit.getOnlinePlayers()) {
             if (online.hasPermission("anticheat.alerts") && !alertsOff.contains(online.getUniqueId())) {
                 online.sendMessage(notice);
             }
         }
 
-        // Use the server's normal ban command (works the same on every Paper version).
-        // Run it on the next tick so we aren't kicking someone in the middle of an event.
-        String command = "ban " + player.getName() + " " + reason;
-        Bukkit.getScheduler().runTask(this, () -> Bukkit.dispatchCommand(Bukkit.getConsoleSender(), command));
+        // Run on the next tick so we aren't kicking someone in the middle of an event.
+        Bukkit.getScheduler().runTask(this, () -> {
+            // Puts them on the server's ban list with an expiry date, so the ban lifts by itself.
+            player.ban(reason, Duration.ofDays(BAN_DAYS), "SimpleAntiCheat");
+            if (player.isOnline()) {
+                player.kick(Component.text("You were banned for cheating (" + check + ") for " + BAN_DAYS + " days.",
+                        NamedTextColor.RED));
+            }
+        });
     }
 }

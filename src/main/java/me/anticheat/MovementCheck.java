@@ -64,14 +64,21 @@ public class MovementCheck implements Listener {
     private static final double SPRINT_JUMP_BOOST = 0.2;
     private static final double SPEED_TOLERANCE = 0.08;
     private static final int GROUND_STEADY_TICKS = 8;   // moves in a row on the ground before the strict ground limit applies
-    private static final int AIR_STEADY_TICKS = 4;      // moves in a row in the air before the strict air limit applies
+    private static final int AIR_STEADY_TICKS = 3;      // moves in a row in the air before the strict air limit applies
 
     // Hard ceilings in steady states (before Speed potion / walk-speed scaling). Vanilla can't beat these:
     // sprinting on flat ground tops out at ~0.286 b/tick, and 4+ ticks into a jump the speed has dropped to ~0.35.
     private static final double MAX_STEADY_GROUND_SPEED = 0.32;
-    private static final double MAX_STEADY_AIR_SPEED = 0.38;
     private static final double GROUND_TOLERANCE = 0.05;
-    private static final double AIR_TOLERANCE = 0.03;
+    private static final double AIR_TOLERANCE = 0.012;
+
+    // Air speed envelope. In vanilla, speed in the air always decays toward 0.289 b/tick (friction 0.91 against
+    // an acceleration of 0.026), and the fastest possible jump leaves you 0.075 above that on the 2nd air tick.
+    // So at air tick k the speed can never exceed 0.289 + 0.075 * 0.91^(k-2). Strafe / bunny-hop speed cheats
+    // hold their speed up instead of letting it fall, so they end up above this curve.
+    private static final double AIR_ASYMPTOTE = 0.2889;
+    private static final double AIR_PEAK_EXCESS = 0.0751;
+    private static final double AIR_MARGIN = 0.035;
 
     /** After a Lunge spear jab the player is flung forward by the client, so give them a moment. */
     private static final int LUNGE_GRACE_TICKS = 30;
@@ -79,7 +86,7 @@ public class MovementCheck implements Listener {
     // Average speed over a window: sustained sprint-jumping averages ~0.36 b/tick (7.2 blocks/sec).
     private static final int AVG_WINDOW_TICKS = 40;
     private static final int AVG_EVAL_EVERY_TICKS = 10;
-    private static final double MAX_AVERAGE_SPEED = 0.40;
+    private static final double MAX_AVERAGE_SPEED = 0.385;
 
     // ---- other ----
     private static final double MAX_STEP = 0.6 + 0.05;
@@ -206,6 +213,9 @@ public class MovementCheck implements Listener {
         }
         if (below == Material.SLIME_BLOCK || Tag.BEDS.isTagged(below)) data.exemptFor(tick, 40); // bouncy
 
+        // Coming out of an elytra glide or a riptide leaves a lot of leftover momentum for a while.
+        if (player.isGliding() || player.isRiptiding()) data.exemptFor(tick, 40);
+
         boolean exempt = isExempt(player, data, tick);
         boolean inWater = player.isInWater();
         boolean odd = inOddBlock(to);
@@ -291,7 +301,9 @@ public class MovementCheck implements Listener {
                 double accel = (onGround ? SPRINT_GROUND_ACCEL : SPRINT_AIR_ACCEL) * multiplier;
                 double tolerance = onGround ? GROUND_TOLERANCE : AIR_TOLERANCE;
                 double physicsLimit = lastHorizontal * friction + accel + tolerance;
-                double ceiling = (onGround ? MAX_STEADY_GROUND_SPEED : MAX_STEADY_AIR_SPEED) * multiplier;
+                double ceiling = onGround
+                        ? MAX_STEADY_GROUND_SPEED * multiplier
+                        : (AIR_ASYMPTOTE + AIR_PEAK_EXCESS * Math.pow(AIR_FRICTION, streak - 2) + AIR_MARGIN) * multiplier;
                 double limit = Math.min(physicsLimit, ceiling);
 
                 if (horizontal > limit) {
