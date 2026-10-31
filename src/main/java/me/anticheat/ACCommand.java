@@ -11,16 +11,13 @@ import org.bukkit.entity.Player;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /**
- * /ac alerts                      - turn your own anti-cheat alerts off/on
- * /ac freeze <player> [seconds]   - freeze a player (default 30s, max 600s)
- * /ac unfreeze <player>           - end a freeze early
+ * /ac alerts            - turn your own anti-cheat alerts off/on
+ * /ac strikes <player>  - see a player's active strikes (5 on the same check = ban)
  */
 public class ACCommand implements CommandExecutor, TabCompleter {
-
-    private static final int DEFAULT_FREEZE_SECONDS = 30;
-    private static final int MAX_FREEZE_SECONDS = 600;
 
     private final AntiCheatPlugin plugin;
 
@@ -37,8 +34,7 @@ public class ACCommand implements CommandExecutor, TabCompleter {
 
         switch (args[0].toLowerCase()) {
             case "alerts" -> toggleAlerts(sender);
-            case "freeze" -> freeze(sender, args);
-            case "unfreeze" -> unfreeze(sender, args);
+            case "strikes" -> strikes(sender, args);
             default -> sendHelp(sender);
         }
         return true;
@@ -58,13 +54,13 @@ public class ACCommand implements CommandExecutor, TabCompleter {
                 nowOn ? NamedTextColor.GREEN : NamedTextColor.YELLOW);
     }
 
-    private void freeze(CommandSender sender, String[] args) {
+    private void strikes(CommandSender sender, String[] args) {
         if (!sender.hasPermission("anticheat.admin")) {
             send(sender, "You don't have permission to do that.", NamedTextColor.RED);
             return;
         }
         if (args.length < 2) {
-            send(sender, "Usage: /ac freeze <player> [seconds]", NamedTextColor.RED);
+            send(sender, "Usage: /ac strikes <player>", NamedTextColor.RED);
             return;
         }
         Player target = Bukkit.getPlayerExact(args[1]);
@@ -73,48 +69,21 @@ public class ACCommand implements CommandExecutor, TabCompleter {
             return;
         }
 
-        int seconds = DEFAULT_FREEZE_SECONDS;
-        if (args.length >= 3) {
-            try {
-                seconds = Integer.parseInt(args[2]);
-            } catch (NumberFormatException ex) {
-                send(sender, "'" + args[2] + "' is not a number of seconds.", NamedTextColor.RED);
-                return;
-            }
-        }
-        seconds = Math.max(1, Math.min(seconds, MAX_FREEZE_SECONDS));
-
-        plugin.getFreezeManager().freeze(target, seconds);
-        send(sender, "Froze " + target.getName() + " for " + seconds + " seconds.", NamedTextColor.GREEN);
-    }
-
-    private void unfreeze(CommandSender sender, String[] args) {
-        if (!sender.hasPermission("anticheat.admin")) {
-            send(sender, "You don't have permission to do that.", NamedTextColor.RED);
+        Map<String, Integer> strikes = plugin.getStrikes(target);
+        if (strikes.isEmpty()) {
+            send(sender, target.getName() + " has no active strikes.", NamedTextColor.GREEN);
             return;
         }
-        if (args.length < 2) {
-            send(sender, "Usage: /ac unfreeze <player>", NamedTextColor.RED);
-            return;
-        }
-        Player target = Bukkit.getPlayerExact(args[1]);
-        if (target == null) {
-            send(sender, "Player '" + args[1] + "' is not online.", NamedTextColor.RED);
-            return;
-        }
-
-        if (plugin.getFreezeManager().unfreeze(target)) {
-            send(sender, "Unfroze " + target.getName() + ".", NamedTextColor.GREEN);
-        } else {
-            send(sender, target.getName() + " isn't frozen.", NamedTextColor.YELLOW);
-        }
+        send(sender, target.getName() + "'s active strikes (" + plugin.getStrikesToBan() + " on one check = ban):",
+                NamedTextColor.GOLD);
+        strikes.forEach((check, count) ->
+                send(sender, " - " + check + ": " + count + "/" + plugin.getStrikesToBan(), NamedTextColor.GRAY));
     }
 
     private void sendHelp(CommandSender sender) {
         send(sender, "SimpleAntiCheat commands:", NamedTextColor.GOLD);
         send(sender, "/ac alerts - turn your alerts off/on", NamedTextColor.GRAY);
-        send(sender, "/ac freeze <player> [seconds] - freeze a player", NamedTextColor.GRAY);
-        send(sender, "/ac unfreeze <player> - unfreeze a player", NamedTextColor.GRAY);
+        send(sender, "/ac strikes <player> - see a player's strikes", NamedTextColor.GRAY);
     }
 
     private void send(CommandSender sender, String text, NamedTextColor color) {
@@ -127,12 +96,9 @@ public class ACCommand implements CommandExecutor, TabCompleter {
 
         if (args.length == 1) {
             if (sender.hasPermission("anticheat.alerts")) options.add("alerts");
-            if (sender.hasPermission("anticheat.admin")) {
-                options.add("freeze");
-                options.add("unfreeze");
-            }
+            if (sender.hasPermission("anticheat.admin")) options.add("strikes");
         } else if (args.length == 2 && sender.hasPermission("anticheat.admin")
-                && (args[0].equalsIgnoreCase("freeze") || args[0].equalsIgnoreCase("unfreeze"))) {
+                && args[0].equalsIgnoreCase("strikes")) {
             for (Player online : Bukkit.getOnlinePlayers()) {
                 options.add(online.getName());
             }

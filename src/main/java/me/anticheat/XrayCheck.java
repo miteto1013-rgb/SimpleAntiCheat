@@ -24,7 +24,7 @@ import java.util.UUID;
  * Several blocks of the same vein mined within seconds count as ONE find, so mining a big vein
  * isn't suspicious. Counts fade over time (halved every 5 minutes), so only recent mining matters.
  *
- * This is a hint for staff to look at, not proof, so it only sends an alert and never freezes anyone.
+ * This is a hint for staff to look at, not proof, so it only sends an alert and is never counted toward a ban.
  * The real protection against x-ray is Paper's built-in anti-xray setting (see the chat notes).
  */
 public class XrayCheck implements Listener {
@@ -89,7 +89,7 @@ public class XrayCheck implements Listener {
         if (s.stone >= MIN_STONE && s.finds >= MIN_FINDS && ratio > MAX_FIND_RATIO
                 && tick - s.lastAlertTick > ALERT_COOLDOWN_TICKS) {
             s.lastAlertTick = tick;
-            // false = alert staff only, don't freeze: this is a statistical hint, not proof
+            // false = alert staff only, never counts toward a ban: this is a statistical hint, not proof
             plugin.flag(player, "Xray",
                     String.format("%.0f ore finds vs %.0f stone mined recently (%.1f%%)",
                             s.finds, s.stone, ratio * 100),

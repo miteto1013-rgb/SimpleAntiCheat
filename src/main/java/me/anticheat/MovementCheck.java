@@ -9,10 +9,14 @@ import org.bukkit.Tag;
 import org.bukkit.World;
 import org.bukkit.block.Block;
 import org.bukkit.block.data.Waterlogged;
+import org.bukkit.entity.FallingBlock;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
+import org.bukkit.event.block.BlockPistonExtendEvent;
+import org.bukkit.event.block.BlockPistonRetractEvent;
+import org.bukkit.event.entity.EntityChangeBlockEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerMoveEvent;
 import org.bukkit.event.player.PlayerRespawnEvent;
@@ -98,6 +102,35 @@ public class MovementCheck implements Listener {
     @EventHandler
     public void onRespawn(PlayerRespawnEvent e) {
         plugin.getData(e.getPlayer()).exemptFor(Bukkit.getCurrentTick(), 40);
+    }
+
+    /** Sand/gravel/anvils landing can end up inside a player's hitbox, which isn't the player's doing. */
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onFallingBlock(EntityChangeBlockEvent e) {
+        if (e.getEntity() instanceof FallingBlock) {
+            exemptNearby(e.getBlock().getLocation(), 4, 40);
+        }
+    }
+
+    /** Pistons can shove blocks (and players) around. */
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onPistonExtend(BlockPistonExtendEvent e) {
+        exemptNearby(e.getBlock().getLocation(), 8, 30);
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onPistonRetract(BlockPistonRetractEvent e) {
+        exemptNearby(e.getBlock().getLocation(), 8, 30);
+    }
+
+    private void exemptNearby(Location where, double radius, int ticks) {
+        int tick = Bukkit.getCurrentTick();
+        double radiusSquared = radius * radius;
+        for (Player player : where.getWorld().getPlayers()) {
+            if (player.getLocation().distanceSquared(where) <= radiusSquared) {
+                plugin.getData(player).exemptFor(tick, ticks);
+            }
+        }
     }
 
     // ------------------------------------------------------------------
@@ -269,13 +302,16 @@ public class MovementCheck implements Listener {
         World world = to.getWorld();
         String info = null;
 
-        double half = 0.25;   // the player is 0.6 wide; shrink a little so touching a wall isn't "inside" it
         double height = player.getHeight();
-        BoundingBox box = new BoundingBox(
-                to.getX() - half, to.getY() + 0.05, to.getZ() - half,
-                to.getX() + half, to.getY() + height - 0.05, to.getZ() + half);
 
-        if (overlapsSolid(world, box)) {
+        // Already inside blocks BEFORE this move: a block landed on them (falling sand, a piston...) or
+        // they were pushed in. That isn't phasing, so there's nothing to judge until they're back in free space.
+        if (insideBlocks(player, from)) {
+            data.addBuffer("phase", -1.0);
+            return;
+        }
+
+        if (insideBlocks(player, to)) {
             info = String.format("inside blocks at %.1f %.1f %.1f", to.getX(), to.getY(), to.getZ());
         } else {
             Vector path = to.toVector().subtract(from.toVector());
@@ -338,6 +374,16 @@ public class MovementCheck implements Listener {
     // ------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------
+
+    /** True if the player's hitbox at this position overlaps solid blocks (shrunk a little so touching a wall doesn't count). */
+    private boolean insideBlocks(Player player, Location loc) {
+        double half = 0.25;   // the player is 0.6 wide
+        double height = player.getHeight();
+        BoundingBox box = new BoundingBox(
+                loc.getX() - half, loc.getY() + 0.05, loc.getZ() - half,
+                loc.getX() + half, loc.getY() + height - 0.05, loc.getZ() + half);
+        return overlapsSolid(loc.getWorld(), box);
+    }
 
     private void remember(PlayerData data, double dy, double horizontal, boolean onGround) {
         data.lastDy = dy;
