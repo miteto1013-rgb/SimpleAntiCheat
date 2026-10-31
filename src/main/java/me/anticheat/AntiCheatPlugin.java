@@ -22,6 +22,17 @@ public class AntiCheatPlugin extends JavaPlugin implements Listener {
     private static final boolean ALERT_FLAGGED_PLAYER = true;
 
     // ------------------------------------------------------------------
+    // Holding flagged players in place
+    // ------------------------------------------------------------------
+
+    /**
+     * When a player is flagged they can't move. The hold is renewed by every flag and lets go
+     * LOCK_SECONDS after the last one. Set to false to turn it off.
+     */
+    private static final boolean LOCK_ON_FLAG = true;
+    private static final int LOCK_SECONDS = 3;
+
+    // ------------------------------------------------------------------
     // Automatic bans. Designed so one glitch can never get anyone banned.
     // ------------------------------------------------------------------
 
@@ -35,7 +46,7 @@ public class AntiCheatPlugin extends JavaPlugin implements Listener {
     private static final int STRIKES_TO_BAN = 5;
     /** A check can give a player at most one strike per this many seconds. */
     private static final int STRIKE_SPACING_SECONDS = 15;
-    /** Strikes older than this are forgotten. */
+    /** Strikes (and the /sus list) look back this far. Older ones are forgotten. */
     private static final int STRIKE_WINDOW_MINUTES = 10;
     /** Operators are never banned, so you can test cheats on yourself. */
     private static final boolean BAN_OPERATORS = false;
@@ -48,6 +59,8 @@ public class AntiCheatPlugin extends JavaPlugin implements Listener {
     /** Players we've already sent a ban command for. */
     private final Set<UUID> bannedNow = new HashSet<>();
 
+    private MovementLock lock;
+
     @Override
     public void onEnable() {
         getServer().getPluginManager().registerEvents(this, this);
@@ -57,11 +70,21 @@ public class AntiCheatPlugin extends JavaPlugin implements Listener {
         getServer().getPluginManager().registerEvents(new TotemCheck(this), this);
         getServer().getPluginManager().registerEvents(new XrayCheck(this), this);
 
-        PluginCommand command = getCommand("ac");
-        if (command != null) {
+        lock = new MovementLock(this);
+        getServer().getPluginManager().registerEvents(lock, this);
+
+        PluginCommand acCommand = getCommand("ac");
+        if (acCommand != null) {
             ACCommand handler = new ACCommand(this);
-            command.setExecutor(handler);
-            command.setTabCompleter(handler);
+            acCommand.setExecutor(handler);
+            acCommand.setTabCompleter(handler);
+        }
+
+        SusCommand sus = new SusCommand(this);
+        getServer().getPluginManager().registerEvents(sus, this);
+        PluginCommand susCommand = getCommand("sus");
+        if (susCommand != null) {
+            susCommand.setExecutor(sus);
         }
 
         // Every minute: knock 1 off every violation level, and forget players who left with no strikes.
@@ -77,13 +100,21 @@ public class AntiCheatPlugin extends JavaPlugin implements Listener {
         return data.computeIfAbsent(player.getUniqueId(), id -> new PlayerData());
     }
 
-    /** A player's active strikes per check, for /ac strikes. */
+    /** A player's active strikes per check, for /ac strikes and /sus. */
     public Map<String, Integer> getStrikes(Player player) {
         return getData(player).currentStrikes(Bukkit.getCurrentTick(), STRIKE_WINDOW_TICKS);
     }
 
     public int getStrikesToBan() {
         return STRIKES_TO_BAN;
+    }
+
+    public int getFlagWindowTicks() {
+        return STRIKE_WINDOW_TICKS;
+    }
+
+    public int getFlagWindowMinutes() {
+        return STRIKE_WINDOW_MINUTES;
     }
 
     /** Turns this player's alerts off or on. Returns true if alerts are now ON. */
@@ -104,27 +135,33 @@ public class AntiCheatPlugin extends JavaPlugin implements Listener {
         }
     }
 
-    /** Called by the checks whenever a player fails one. Alerts staff and counts a strike toward a ban. */
+    /** Called by the checks whenever a player fails one. Alerts staff, holds the player, counts a strike. */
     public void flag(Player player, String check, String info) {
         flag(player, check, info, true);
     }
 
     /**
-     * Same, but countsTowardBan = false makes it an alert only (used for statistical checks like X-ray,
-     * which are hints for staff and never a reason to ban automatically).
+     * Same, but takeAction = false makes it an alert only: no hold and no strike toward a ban
+     * (used for statistical checks like X-ray, which are hints for staff and never proof).
      */
-    public void flag(Player player, String check, String info, boolean countsTowardBan) {
+    public void flag(Player player, String check, String info, boolean takeAction) {
         PlayerData playerData = getData(player);
         int vl = playerData.addViolation(check);
         int tick = Bukkit.getCurrentTick();
 
+        if (LOCK_ON_FLAG && takeAction) {
+            lock.lock(player, LOCK_SECONDS);
+        }
+
         int strikes = 0;
-        boolean banRuleApplies = BAN_ENABLED && countsTowardBan;
+        boolean banRuleApplies = BAN_ENABLED && takeAction;
         if (banRuleApplies) {
             strikes = playerData.addStrike(check, tick, STRIKE_SPACING_SECONDS * 20, STRIKE_WINDOW_TICKS);
         }
 
         if (playerData.canAlert(check, tick, 10)) {
+            playerData.recordFlag(check, info, tick);   // what /sus shows
+
             String strikeText = banRuleApplies ? " | strike " + strikes + "/" + STRIKES_TO_BAN : "";
             getLogger().info(player.getName() + " failed " + check + " (" + info + ") VL " + vl + strikeText);
 

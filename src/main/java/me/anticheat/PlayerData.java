@@ -23,6 +23,8 @@ public class PlayerData {
     public int jesusTicks;
     public int stateStreak = 1;               // how many moves in a row ended in the current ground state
     public int lastDigTick = -1000;           // last time the player started or finished breaking a block
+    public int boatAirTicks;                  // consecutive boat moves with the boat in the air
+    public double boatLastDy;                 // the boat's vertical movement on its previous move
     public final Deque<double[]> speedSamples = new ArrayDeque<>();   // {tick, horizontal distance}
     public int speedWindowStart = -1;
     public int lastAvgEval = -1000;
@@ -88,6 +90,28 @@ public class PlayerData {
             if (!list.isEmpty()) result.put(entry.getKey(), list.size());
         }
         return result;
+    }
+
+    // ---------- flag log (what /sus shows) ----------
+    public static class FlagRecord {
+        public int count;
+        public int lastTick;
+        public String lastInfo = "";
+    }
+
+    private final Map<String, FlagRecord> flagLog = new HashMap<>();
+
+    public void recordFlag(String check, String info, int nowTick) {
+        FlagRecord record = flagLog.computeIfAbsent(check, k -> new FlagRecord());
+        record.count++;
+        record.lastTick = nowTick;
+        record.lastInfo = info;
+    }
+
+    /** Checks this player was flagged for within the window (a copy, safe to loop over). */
+    public Map<String, FlagRecord> recentFlags(int nowTick, int windowTicks) {
+        flagLog.values().removeIf(record -> nowTick - record.lastTick > windowTicks);
+        return new HashMap<>(flagLog);
     }
 
     /** Rate-limits chat alerts so a single cheater doesn't flood the chat. */
