@@ -8,6 +8,8 @@ import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
+import org.bukkit.event.block.BlockBreakEvent;
+import org.bukkit.event.block.BlockDamageEvent;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.event.player.PlayerAnimationEvent;
@@ -21,7 +23,8 @@ import org.bukkit.util.Vector;
  *  - Reach: distance from your eyes to the target's hitbox must be about 3 blocks or less.
  *  - Aim:   a ray along where you're looking must actually pass through the target's hitbox.
  *  - Multi: you can't hit two different entities within the same tick or two.
- *  - Clicks: more than 20 swings in one second is not humanly sustainable.
+ *  - Clicks: more than 24 swings in one second is not humanly sustainable. (Holding the mouse to break
+ *            blocks swings 20+ times a second, so swings while mining are not counted.)
  *
  * Because players have ping, the target is never exactly where the attacker's screen shows it,
  * so Reach and Aim both widen their tolerance based on the attacker's ping.
@@ -29,7 +32,7 @@ import org.bukkit.util.Vector;
 public class CombatCheck implements Listener {
 
     private static final double VANILLA_REACH = 3.0;
-    private static final int MAX_CPS = 20;
+    private static final int MAX_CPS = 24;
 
     private final AntiCheatPlugin plugin;
 
@@ -100,12 +103,25 @@ public class CombatCheck implements Listener {
      * packets in tick-sized batches and millisecond timings would be misleading.
      */
     @EventHandler(priority = EventPriority.MONITOR)
+    public void onStartDigging(BlockDamageEvent e) {
+        plugin.getData(e.getPlayer()).lastDigTick = Bukkit.getCurrentTick();
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onFinishDigging(BlockBreakEvent e) {
+        plugin.getData(e.getPlayer()).lastDigTick = Bukkit.getCurrentTick();
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR)
     public void onSwing(PlayerAnimationEvent e) {
         if (e.getAnimationType() != PlayerAnimationType.ARM_SWING) return;
 
         Player player = e.getPlayer();
         PlayerData data = plugin.getData(player);
         int tick = Bukkit.getCurrentTick();
+
+        // Holding the mouse while mining swings the arm every tick (sometimes twice). That's not clicking.
+        if (tick - data.lastDigTick <= 10) return;
 
         data.swingTicks.addLast(tick);
         while (!data.swingTicks.isEmpty() && tick - data.swingTicks.peekFirst() >= 20) {

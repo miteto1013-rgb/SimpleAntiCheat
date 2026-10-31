@@ -21,6 +21,8 @@ public class PlayerData {
     public boolean lastOnGround = true;
     public boolean groundBeforeLast = true;   // was the previous tick started on the ground?
     public int jesusTicks;
+    public int stateStreak = 1;               // how many moves in a row ended in the current ground state
+    public int lastDigTick = -1000;           // last time the player started or finished breaking a block
     public final Deque<double[]> speedSamples = new ArrayDeque<>();   // {tick, horizontal distance}
     public int speedWindowStart = -1;
     public int lastAvgEval = -1000;

@@ -58,7 +58,9 @@ public class MovementCheck implements Listener {
     private static final double SPRINT_GROUND_ACCEL = 0.13;
     private static final double SPRINT_AIR_ACCEL = 0.026;
     private static final double SPRINT_JUMP_BOOST = 0.2;
-    private static final double SPEED_TOLERANCE = 0.05;
+    private static final double SPEED_TOLERANCE = 0.08;
+    private static final int GROUND_STEADY_TICKS = 6;   // moves in a row on the ground before the strict ground limit applies
+    private static final int AIR_STEADY_TICKS = 4;      // moves in a row in the air before the strict air limit applies
 
     // Average speed over a window: sustained sprint-jumping averages ~0.36 b/tick (7.2 blocks/sec).
     private static final int AVG_WINDOW_TICKS = 40;
@@ -239,22 +241,24 @@ public class MovementCheck implements Listener {
                 multiplier *= 1.0 + 0.2 * (speedEffect.getAmplifier() + 1);
             }
 
-            // (A) Per tick: the fastest speed vanilla physics COULD have produced from last tick's speed.
-            //     Last tick's movement is slowed by friction depending on whether that tick STARTED on the
-            //     ground; this tick's acceleration depends on whether THIS tick starts on the ground.
-            if (lastHorizontal >= 0) {
-                double friction = groundBeforeLast ? GROUND_FRICTION : AIR_FRICTION;
-                double accel = (startedOnGround ? SPRINT_GROUND_ACCEL : SPRINT_AIR_ACCEL) * multiplier;
-                double maxSpeed = lastHorizontal * friction + accel;
-                if (startedOnGround && !onGround) maxSpeed += SPRINT_JUMP_BOOST;   // the jump tick
+            // (A) Per tick, in STEADY states only: the fastest speed vanilla physics could produce from last
+            //     tick's speed. The moves where you jump, land, or step up/down a block are skipped on
+            //     purpose: that's exactly where friction and ground state change, and an ordinary walk up
+            //     or down a block must never look like speed. A real speed cheat keeps going, so it still shows.
+            int streak = (onGround == startedOnGround) ? data.stateStreak + 1 : 1;
+            boolean steady = onGround ? streak >= GROUND_STEADY_TICKS : streak >= AIR_STEADY_TICKS;
+            if (lastHorizontal >= 0 && steady) {
+                double friction = onGround ? GROUND_FRICTION : AIR_FRICTION;
+                double accel = (onGround ? SPRINT_GROUND_ACCEL : SPRINT_AIR_ACCEL) * multiplier;
+                double limit = lastHorizontal * friction + accel + SPEED_TOLERANCE;
 
-                if (horizontal > maxSpeed + SPEED_TOLERANCE) {
-                    if (data.addBuffer("speed", 1.0) > 2.0) {
-                        plugin.flag(player, "Speed",
-                                String.format("%.3f b/tick, max %.3f", horizontal, maxSpeed + SPEED_TOLERANCE));
+                if (horizontal > limit) {
+                    if (data.addBuffer("speed", 1.0) > 3.0) {
+                        plugin.flag(player, "Speed", String.format("%.3f b/tick, max %.3f (%s, dy=%.2f)",
+                                horizontal, limit, onGround ? "ground" : "air", dy));
                     }
                 } else {
-                    data.addBuffer("speed", -0.05);   // decays slowly so repeated small overshoots still add up
+                    data.addBuffer("speed", -0.1);
                 }
             }
 
@@ -388,6 +392,7 @@ public class MovementCheck implements Listener {
     private void remember(PlayerData data, double dy, double horizontal, boolean onGround) {
         data.lastDy = dy;
         data.lastHorizontal = horizontal;
+        data.stateStreak = (onGround == data.lastOnGround) ? data.stateStreak + 1 : 1;
         data.groundBeforeLast = data.lastOnGround;
         data.lastOnGround = onGround;
     }

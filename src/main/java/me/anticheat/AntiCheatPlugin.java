@@ -25,8 +25,12 @@ public class AntiCheatPlugin extends JavaPlugin implements Listener {
     // Automatic bans. Designed so one glitch can never get anyone banned.
     // ------------------------------------------------------------------
 
-    /** Master switch. Set to false for alerts only: nobody is ever banned. */
-    private static final boolean BAN_ENABLED = true;
+    /**
+     * Master switch. false = alerts only: nobody is ever banned.
+     * Leave this OFF until you've played for a while and never seen "strike 3/5" or worse on normal play.
+     * Then change it to true.
+     */
+    private static final boolean BAN_ENABLED = false;
     /** A player is banned once they have this many strikes on the SAME check. */
     private static final int STRIKES_TO_BAN = 5;
     /** A check can give a player at most one strike per this many seconds. */
