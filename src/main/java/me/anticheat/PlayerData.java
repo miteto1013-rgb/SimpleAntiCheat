@@ -101,11 +101,13 @@ public class PlayerData {
 
     private final Map<String, FlagRecord> flagLog = new HashMap<>();
 
-    public void recordFlag(String check, String info, int nowTick) {
+    /** Records a flag and returns how many times this check has flagged the player recently. */
+    public int recordFlag(String check, String info, int nowTick) {
         FlagRecord record = flagLog.computeIfAbsent(check, k -> new FlagRecord());
         record.count++;
         record.lastTick = nowTick;
         record.lastInfo = info;
+        return record.count;
     }
 
     /** Checks this player was flagged for within the window (a copy, safe to loop over). */

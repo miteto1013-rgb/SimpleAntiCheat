@@ -84,9 +84,12 @@ public class MovementCheck implements Listener {
     private static final int LUNGE_GRACE_TICKS = 30;
 
     // Average speed over a window: sustained sprint-jumping averages ~0.36 b/tick (7.2 blocks/sec).
-    private static final int AVG_WINDOW_TICKS = 40;
-    private static final int AVG_EVAL_EVERY_TICKS = 10;
-    private static final double MAX_AVERAGE_SPEED = 0.385;
+    private static final int AVG_WINDOW_TICKS = 20;
+    private static final int AVG_EVAL_EVERY_TICKS = 5;
+    private static final double MAX_AVERAGE_SPEED = 0.40;
+
+    // No single vanilla move gets anywhere near this fast (the very best sprint-jump tick is ~0.62 b/tick).
+    private static final double HARD_SPEED_CAP = 0.80;
 
     // ---- other ----
     private static final double MAX_STEP = 0.6 + 0.05;
@@ -114,6 +117,9 @@ public class MovementCheck implements Listener {
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onTeleport(PlayerTeleportEvent e) {
+        // While a flagged player is being held in place, every move is turned into a tiny teleport. Those
+        // must not give them a grace period, or they'd get a free pass for a second after every hold.
+        if (plugin.isLocked(e.getPlayer())) return;
         plugin.getData(e.getPlayer()).exemptFor(Bukkit.getCurrentTick(), 20);
     }
 
@@ -288,6 +294,15 @@ public class MovementCheck implements Listener {
                 multiplier *= 1.0 + 0.2 * (speedEffect.getAmplifier() + 1);
             }
 
+            // (0) Blatant burst: no vanilla move, in any state, gets anywhere near this fast.
+            if (horizontal > HARD_SPEED_CAP * multiplier) {
+                if (data.addBuffer("speedburst", 1.0) > 1.5) {
+                    plugin.flag(player, "Speed", String.format("%.3f b/tick in a single move (vanilla max is about 0.62)", horizontal));
+                }
+            } else {
+                data.addBuffer("speedburst", -0.5);
+            }
+
             // (A) Per tick, in STEADY states only. The moves where you jump, land, or step up/down a block
             //     are skipped on purpose (friction and ground state change there, and an ordinary walk up
             //     or down a block must never look like speed). A real speed cheat keeps going, so it shows.
@@ -420,7 +435,7 @@ public class MovementCheck implements Listener {
         double limit = MAX_AVERAGE_SPEED * multiplier;
 
         if (average > limit) {
-            if (data.addBuffer("speedavg", 1.0) > 2.0) {
+            if (data.addBuffer("speedavg", 1.0) > 1.5) {
                 plugin.flag(player, "Speed",
                         String.format("average %.3f b/tick over 2s, max %.3f", average, limit));
             }

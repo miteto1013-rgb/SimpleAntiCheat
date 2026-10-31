@@ -45,8 +45,8 @@ public class ACCommand implements CommandExecutor, TabCompleter {
             send(sender, "Only players can toggle alerts.", NamedTextColor.RED);
             return;
         }
-        if (!player.hasPermission("anticheat.alerts")) {
-            send(sender, "You don't have permission to do that.", NamedTextColor.RED);
+        if (!player.isOp()) {
+            send(sender, "Only operators can see anti-cheat alerts.", NamedTextColor.RED);
             return;
         }
         boolean nowOn = plugin.toggleAlerts(player);
@@ -95,7 +95,7 @@ public class ACCommand implements CommandExecutor, TabCompleter {
         List<String> options = new ArrayList<>();
 
         if (args.length == 1) {
-            if (sender.hasPermission("anticheat.alerts")) options.add("alerts");
+            if (sender.isOp()) options.add("alerts");
             if (sender.hasPermission("anticheat.admin")) options.add("strikes");
         } else if (args.length == 2 && sender.hasPermission("anticheat.admin")
                 && args[0].equalsIgnoreCase("strikes")) {

@@ -19,9 +19,6 @@ import java.util.UUID;
 
 public class AntiCheatPlugin extends JavaPlugin implements Listener {
 
-    /** While testing: the flagged player also sees their own alerts, even without the permission. */
-    private static final boolean ALERT_FLAGGED_PLAYER = true;
-
     // ------------------------------------------------------------------
     // Holding flagged players in place
     // ------------------------------------------------------------------
@@ -68,6 +65,7 @@ public class AntiCheatPlugin extends JavaPlugin implements Listener {
         getServer().getPluginManager().registerEvents(new VehicleCheck(this), this);
         getServer().getPluginManager().registerEvents(new TotemCheck(this), this);
         getServer().getPluginManager().registerEvents(new XrayCheck(this), this);
+        getServer().getPluginManager().registerEvents(new CrystalCheck(this), this);
 
         lock = new MovementLock(this);
         getServer().getPluginManager().registerEvents(lock, this);
@@ -102,6 +100,10 @@ public class AntiCheatPlugin extends JavaPlugin implements Listener {
     /** A player's active strikes per check, for /ac strikes and /sus. */
     public Map<String, Integer> getStrikes(Player player) {
         return getData(player).currentStrikes(Bukkit.getCurrentTick(), STRIKE_WINDOW_TICKS);
+    }
+
+    public boolean isLocked(Player player) {
+        return lock != null && lock.isLocked(player);
     }
 
     public int getStrikesToBan() {
@@ -159,22 +161,20 @@ public class AntiCheatPlugin extends JavaPlugin implements Listener {
         }
 
         if (playerData.canAlert(check, tick, 10)) {
-            playerData.recordFlag(check, info, tick);   // what /sus shows
+            int count = playerData.recordFlag(check, info, tick);   // what /sus shows
 
+            // The console keeps the full details; players only see name, flag and how many times.
             String strikeText = banRuleApplies ? " | strike " + strikes + "/" + STRIKES_TO_BAN : "";
-            getLogger().info(player.getName() + " failed " + check + " (" + info + ") VL " + vl + strikeText);
+            getLogger().info(player.getName() + " failed " + check + " x" + count + " (" + info + ") VL " + vl + strikeText);
 
             Component message = Component.text("[AC] ", NamedTextColor.RED)
                     .append(Component.text(player.getName(), NamedTextColor.WHITE))
-                    .append(Component.text(" failed ", NamedTextColor.GRAY))
+                    .append(Component.text(" - ", NamedTextColor.GRAY))
                     .append(Component.text(check, NamedTextColor.RED))
-                    .append(Component.text(" (" + info + ") VL " + vl + strikeText, NamedTextColor.GRAY));
+                    .append(Component.text(" x" + count, NamedTextColor.GRAY));
 
             for (Player online : Bukkit.getOnlinePlayers()) {
-                if (alertsOff.contains(online.getUniqueId())) continue;
-                boolean isStaff = online.hasPermission("anticheat.alerts");
-                boolean isSelf = ALERT_FLAGGED_PLAYER && online.equals(player);
-                if (isStaff || isSelf) {
+                if (online.isOp() && !alertsOff.contains(online.getUniqueId())) {
                     online.sendMessage(message);
                 }
             }
@@ -196,7 +196,7 @@ public class AntiCheatPlugin extends JavaPlugin implements Listener {
                 .append(Component.text(player.getName() + " was banned for " + BAN_DAYS + " days (" + check + ").",
                         NamedTextColor.GOLD));
         for (Player online : Bukkit.getOnlinePlayers()) {
-            if (online.hasPermission("anticheat.alerts") && !alertsOff.contains(online.getUniqueId())) {
+            if (online.isOp() && !alertsOff.contains(online.getUniqueId())) {
                 online.sendMessage(notice);
             }
         }
