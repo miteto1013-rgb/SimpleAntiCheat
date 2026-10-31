@@ -1,5 +1,5 @@
 name: SimpleAntiCheat
-version: 0.3.0
+version: 0.4.0
 main: me.anticheat.AntiCheatPlugin
 api-version: '1.21'
 description: Home-made anti-cheat (movement, combat, boats, totems, x-ray).
@@ -9,11 +9,15 @@ commands:
     description: Anti-cheat commands
     usage: /ac <alerts|strikes>
     aliases: [anticheat]
+  sus:
+    description: Open a menu of players flagged by the anti-cheat (click one to teleport to them)
+    usage: /sus
+    aliases: [flagged]
 
 permissions:
   anticheat.alerts:
     description: Receive anti-cheat flag alerts in chat and use /ac alerts
     default: op
   anticheat.admin:
-    description: View a player's strikes with /ac strikes
+    description: Use /sus and /ac strikes
     default: op
