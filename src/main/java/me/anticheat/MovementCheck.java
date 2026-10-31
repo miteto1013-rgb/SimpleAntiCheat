@@ -9,6 +9,7 @@ import org.bukkit.Tag;
 import org.bukkit.World;
 import org.bukkit.block.Block;
 import org.bukkit.block.data.Waterlogged;
+import org.bukkit.enchantments.Enchantment;
 import org.bukkit.entity.FallingBlock;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
@@ -17,11 +18,14 @@ import org.bukkit.event.Listener;
 import org.bukkit.event.block.BlockPistonExtendEvent;
 import org.bukkit.event.block.BlockPistonRetractEvent;
 import org.bukkit.event.entity.EntityChangeBlockEvent;
+import org.bukkit.event.player.PlayerAnimationEvent;
+import org.bukkit.event.player.PlayerAnimationType;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerMoveEvent;
 import org.bukkit.event.player.PlayerRespawnEvent;
 import org.bukkit.event.player.PlayerTeleportEvent;
 import org.bukkit.event.player.PlayerVelocityEvent;
+import org.bukkit.inventory.ItemStack;
 import org.bukkit.potion.PotionEffect;
 import org.bukkit.potion.PotionEffectType;
 import org.bukkit.util.BoundingBox;
@@ -59,8 +63,18 @@ public class MovementCheck implements Listener {
     private static final double SPRINT_AIR_ACCEL = 0.026;
     private static final double SPRINT_JUMP_BOOST = 0.2;
     private static final double SPEED_TOLERANCE = 0.08;
-    private static final int GROUND_STEADY_TICKS = 6;   // moves in a row on the ground before the strict ground limit applies
+    private static final int GROUND_STEADY_TICKS = 8;   // moves in a row on the ground before the strict ground limit applies
     private static final int AIR_STEADY_TICKS = 4;      // moves in a row in the air before the strict air limit applies
+
+    // Hard ceilings in steady states (before Speed potion / walk-speed scaling). Vanilla can't beat these:
+    // sprinting on flat ground tops out at ~0.286 b/tick, and 4+ ticks into a jump the speed has dropped to ~0.35.
+    private static final double MAX_STEADY_GROUND_SPEED = 0.32;
+    private static final double MAX_STEADY_AIR_SPEED = 0.38;
+    private static final double GROUND_TOLERANCE = 0.05;
+    private static final double AIR_TOLERANCE = 0.03;
+
+    /** After a Lunge spear jab the player is flung forward by the client, so give them a moment. */
+    private static final int LUNGE_GRACE_TICKS = 30;
 
     // Average speed over a window: sustained sprint-jumping averages ~0.36 b/tick (7.2 blocks/sec).
     private static final int AVG_WINDOW_TICKS = 40;
@@ -123,6 +137,29 @@ public class MovementCheck implements Listener {
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onPistonRetract(BlockPistonRetractEvent e) {
         exemptNearby(e.getBlock().getLocation(), 8, 30);
+    }
+
+    /**
+     * Spear + Lunge: a jab attack flings the player forward (and slightly up). The client does this itself,
+     * so the server sees a burst of speed that isn't a cheat. Only a spear that really has Lunge counts,
+     * and only if the player has the hunger for it (Lunge needs at least 6 food points).
+     */
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onSpearJab(PlayerAnimationEvent e) {
+        if (e.getAnimationType() != PlayerAnimationType.ARM_SWING) return;
+        Player player = e.getPlayer();
+        if (player.getFoodLevel() < 6) return;
+        if (isLungeSpear(player.getInventory().getItemInMainHand())) {
+            plugin.getData(player).exemptFor(Bukkit.getCurrentTick(), LUNGE_GRACE_TICKS);
+        }
+    }
+
+    private boolean isLungeSpear(ItemStack item) {
+        if (item == null || !item.getType().name().endsWith("_SPEAR")) return false;
+        for (Enchantment enchantment : item.getEnchantments().keySet()) {
+            if (enchantment.getKey().getKey().equals("lunge")) return true;
+        }
+        return false;
     }
 
     private void exemptNearby(Location where, double radius, int ticks) {
@@ -241,21 +278,26 @@ public class MovementCheck implements Listener {
                 multiplier *= 1.0 + 0.2 * (speedEffect.getAmplifier() + 1);
             }
 
-            // (A) Per tick, in STEADY states only: the fastest speed vanilla physics could produce from last
-            //     tick's speed. The moves where you jump, land, or step up/down a block are skipped on
-            //     purpose: that's exactly where friction and ground state change, and an ordinary walk up
-            //     or down a block must never look like speed. A real speed cheat keeps going, so it still shows.
+            // (A) Per tick, in STEADY states only. The moves where you jump, land, or step up/down a block
+            //     are skipped on purpose (friction and ground state change there, and an ordinary walk up
+            //     or down a block must never look like speed). A real speed cheat keeps going, so it shows.
+            //     Two limits, and exceeding EITHER one is a flag:
+            //       - physics: the fastest vanilla physics could produce from last tick's speed
+            //       - ceiling: the fixed top speed vanilla can reach in this state (catches steady speed)
             int streak = (onGround == startedOnGround) ? data.stateStreak + 1 : 1;
             boolean steady = onGround ? streak >= GROUND_STEADY_TICKS : streak >= AIR_STEADY_TICKS;
             if (lastHorizontal >= 0 && steady) {
                 double friction = onGround ? GROUND_FRICTION : AIR_FRICTION;
                 double accel = (onGround ? SPRINT_GROUND_ACCEL : SPRINT_AIR_ACCEL) * multiplier;
-                double limit = lastHorizontal * friction + accel + SPEED_TOLERANCE;
+                double tolerance = onGround ? GROUND_TOLERANCE : AIR_TOLERANCE;
+                double physicsLimit = lastHorizontal * friction + accel + tolerance;
+                double ceiling = (onGround ? MAX_STEADY_GROUND_SPEED : MAX_STEADY_AIR_SPEED) * multiplier;
+                double limit = Math.min(physicsLimit, ceiling);
 
                 if (horizontal > limit) {
                     if (data.addBuffer("speed", 1.0) > 3.0) {
-                        plugin.flag(player, "Speed", String.format("%.3f b/tick, max %.3f (%s, dy=%.2f)",
-                                horizontal, limit, onGround ? "ground" : "air", dy));
+                        plugin.flag(player, "Speed", String.format("%.3f b/tick, max %.3f (%s)",
+                                horizontal, limit, onGround ? "on ground" : "in air"));
                     }
                 } else {
                     data.addBuffer("speed", -0.1);
