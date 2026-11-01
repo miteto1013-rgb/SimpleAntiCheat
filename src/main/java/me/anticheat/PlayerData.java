@@ -23,6 +23,11 @@ public class PlayerData {
     public int jesusTicks;
     public int stateStreak = 1;               // how many moves in a row ended in the current ground state
     public int lastDigTick = -1000;           // last time the player started or finished breaking a block
+    public double lastGroundY = Double.NaN;   // height of the last spot the player stood on
+    public double lastYawDelta;               // how far the player turned on their last move event (degrees)
+    public int rotationTick = -1000;          // when that happened
+    public final Deque<Double> aimErrors = new ArrayDeque<>();   // angle between crosshair and target on recent hits
+    public final Deque<Integer> snapHits = new ArrayDeque<>();   // recent hits that came right after a huge flick
     public int boatAirTicks;                  // consecutive boat moves with the boat in the air
     public double boatLastDy;                 // the boat's vertical movement on its previous move
     public final Deque<double[]> speedSamples = new ArrayDeque<>();   // {tick, horizontal distance}

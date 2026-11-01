@@ -66,6 +66,7 @@ public class AntiCheatPlugin extends JavaPlugin implements Listener {
         getServer().getPluginManager().registerEvents(new TotemCheck(this), this);
         getServer().getPluginManager().registerEvents(new XrayCheck(this), this);
         getServer().getPluginManager().registerEvents(new CrystalCheck(this), this);
+        getServer().getPluginManager().registerEvents(new BowCheck(this), this);
 
         lock = new MovementLock(this);
         getServer().getPluginManager().registerEvents(lock, this);

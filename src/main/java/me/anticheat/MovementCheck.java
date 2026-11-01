@@ -54,6 +54,8 @@ public class MovementCheck implements Listener {
     private static final double DRAG = 0.98;
     private static final double MAX_JUMP_DY = 0.42 + 0.05;
     private static final double GRAVITY_TOLERANCE = 0.03;
+    /** A jump peaks 1.25 blocks above where you left the ground. Anything higher is a high jump or flight. */
+    private static final double MAX_JUMP_RISE = 1.35;
 
     // ---- horizontal physics (blocks per tick) ----
     // Each tick: velocity = lastVelocity * friction + acceleration (+ a 0.2 kick on the jump tick).
@@ -236,6 +238,7 @@ public class MovementCheck implements Listener {
             data.speedSamples.clear();      // can't judge speed here, so restart the average-speed window
             data.speedWindowStart = -1;
             remember(data, dy, horizontal, onGround);
+            data.lastGroundY = to.getY();
             data.airTicks = onGround ? 0 : 5;      // 5 = "already airborne", skips the first-tick jump check
             return;
         }
@@ -243,16 +246,26 @@ public class MovementCheck implements Listener {
         // ---------------- FLY ----------------
         if (onGround) {
             data.airTicks = 0;
+            data.lastGroundY = to.getY();
         } else {
             data.airTicks++;
+            if (Double.isNaN(data.lastGroundY)) data.lastGroundY = from.getY();
 
             boolean violation = false;
+            double weight = 1.0;
             String info = "";
 
-            if (data.airTicks == 1) {
+            double rise = to.getY() - data.lastGroundY;
+            if (rise > MAX_JUMP_RISE) {
+                // Higher above the ground than any jump can take you: high jump, flight, or a long hover.
+                violation = true;
+                weight = 2.0;
+                info = String.format("%.2f blocks above the ground (a jump peaks at 1.25)", rise);
+            } else if (data.airTicks == 1) {
                 // First tick off the ground: a jump gives +0.42, nothing more.
                 if (dy > MAX_JUMP_DY) {
                     violation = true;
+                    weight = 2.0;
                     info = String.format("jump dy=%.3f max=%.3f", dy, MAX_JUMP_DY);
                 }
             } else {
@@ -266,7 +279,7 @@ public class MovementCheck implements Listener {
             }
 
             if (violation) {
-                if (data.addBuffer("fly", 1.0) > 3.0) plugin.flag(player, "Fly", info);
+                if (data.addBuffer("fly", weight) > 2.0) plugin.flag(player, "Fly", info);
             } else {
                 data.addBuffer("fly", -0.1);
             }
@@ -426,12 +439,14 @@ public class MovementCheck implements Listener {
         if (tick - data.lastAvgEval < AVG_EVAL_EVERY_TICKS) return;
         data.lastAvgEval = tick;
 
-        // Server lag makes players look faster per server tick, so don't judge while it's lagging.
-        if (Bukkit.getTPS()[0] < 19.0) return;
+        // If the server is running slow (under 20 ticks a second) a player covers more ground per SERVER tick
+        // than normal, so scale the average back down. Only give up when the server is badly lagging.
+        double tps = Math.min(20.0, Bukkit.getTPS()[0]);
+        if (tps < 15.0) return;
 
         double sum = 0;
         for (double[] sample : data.speedSamples) sum += sample[1];
-        double average = sum / AVG_WINDOW_TICKS;
+        double average = sum / AVG_WINDOW_TICKS * (tps / 20.0);
         double limit = MAX_AVERAGE_SPEED * multiplier;
 
         if (average > limit) {

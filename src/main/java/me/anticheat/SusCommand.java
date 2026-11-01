@@ -114,24 +114,16 @@ public class SusCommand implements CommandExecutor, Listener {
         meta.setOwningPlayer(entry.player);
         meta.displayName(line(entry.player.getName(), NamedTextColor.YELLOW));
 
+        // One short line per check: how many times, and how long ago. Nothing else.
         List<Component> lore = new ArrayList<>();
         entry.flags.entrySet().stream()
                 .sorted((a, b) -> Integer.compare(b.getValue().lastTick, a.getValue().lastTick))
-                .limit(5)
+                .limit(8)
                 .forEach(flag -> {
                     PlayerData.FlagRecord record = flag.getValue();
-                    lore.add(line(flag.getKey() + ": " + record.count + (record.count == 1 ? " flag, " : " flags, ")
-                            + ago(now - record.lastTick), NamedTextColor.RED));
-                    lore.add(line("  " + shorten(record.lastInfo, 44), NamedTextColor.DARK_GRAY));
+                    lore.add(line(flag.getKey() + " x" + record.count + " - " + ago(now - record.lastTick),
+                            NamedTextColor.RED));
                 });
-
-        Map<String, Integer> strikes = plugin.getStrikes(entry.player);
-        if (!strikes.isEmpty()) {
-            StringBuilder text = new StringBuilder("Strikes: ");
-            strikes.forEach((check, count) -> text.append(check).append(' ')
-                    .append(count).append('/').append(plugin.getStrikesToBan()).append("  "));
-            lore.add(line(text.toString().trim(), NamedTextColor.GRAY));
-        }
 
         lore.add(Component.empty());
         lore.add(line("Click to teleport to them", NamedTextColor.GREEN));
@@ -180,7 +172,4 @@ public class SusCommand implements CommandExecutor, Listener {
         return seconds < 60 ? seconds + "s ago" : (seconds / 60) + "m ago";
     }
 
-    private static String shorten(String text, int max) {
-        return text.length() <= max ? text : text.substring(0, max - 1) + "…";
-    }
 }
