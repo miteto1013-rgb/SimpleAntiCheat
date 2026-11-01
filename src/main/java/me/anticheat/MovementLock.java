@@ -17,15 +17,28 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * Holds a flagged player in place. Every flag renews the lock, and it lets go a few seconds after the
- * LAST flag. Since a locked player can't move, movement flags stop coming, so the lock runs out by itself.
- * A cheater who starts again after being released just gets flagged and held again.
+ * Holds a player in place after a MOVEMENT check flags them. Every movement flag renews the hold, and it
+ * lets go a few seconds after the LAST one. Since a held player can't move, movement flags stop coming, so
+ * the hold runs out by itself.
+ *
+ * Safety nets so nobody can ever get stuck:
+ *  - a hold can be renewed for at most 8 seconds in a row
+ *  - after a hold ends there are 2 seconds in which nobody can be held again
+ *  - when a hold ends, everything we remembered about how the player was moving is wiped, because while
+ *    they were held their position was frozen but their game kept falling, so the old numbers are stale
  */
 public class MovementLock implements Listener {
 
+    private static final int MAX_HOLD_TICKS = 20 * 8;
+    private static final int COOLDOWN_TICKS = 20 * 2;
+
     private final AntiCheatPlugin plugin;
-    /** Player -> server tick at which the lock ends. */
+    /** Player -> server tick at which the hold ends. */
     private final Map<UUID, Integer> lockedUntil = new HashMap<>();
+    /** Player -> when their current hold started (to cap how long it can be renewed). */
+    private final Map<UUID, Integer> holdStart = new HashMap<>();
+    /** Player -> they can't be held again before this tick. */
+    private final Map<UUID, Integer> cooldownUntil = new HashMap<>();
 
     public MovementLock(AntiCheatPlugin plugin) {
         this.plugin = plugin;
@@ -37,24 +50,35 @@ public class MovementLock implements Listener {
     }
 
     public void lock(Player player, int seconds) {
+        UUID id = player.getUniqueId();
+        int now = Bukkit.getCurrentTick();
         boolean alreadyLocked = isLocked(player);
-        lockedUntil.put(player.getUniqueId(), Bukkit.getCurrentTick() + seconds * 20);
 
         if (!alreadyLocked) {
+            Integer cooldown = cooldownUntil.get(id);
+            if (cooldown != null && now < cooldown) return;   // only just released: give them a moment
+            holdStart.put(id, now);
             player.sendMessage(Component.text(
                     "[AC] You were stopped by the anti-cheat. You can move again in a moment.", NamedTextColor.RED));
+        } else if (now - holdStart.getOrDefault(id, now) > MAX_HOLD_TICKS) {
+            return;   // held long enough already: let it run out
         }
+
+        lockedUntil.put(id, now + seconds * 20);
 
         // Someone in a boat would just keep being carried, so take them out of it.
         if (player.isInsideVehicle()) {
             Bukkit.getScheduler().runTask(plugin, player::leaveVehicle);
         }
 
-        // Release once the time is up (unless another flag renewed the lock in the meantime).
+        // Release once the time is up (unless another flag renewed the hold in the meantime).
         Bukkit.getScheduler().runTaskLater(plugin, () -> {
-            Integer until = lockedUntil.get(player.getUniqueId());
+            Integer until = lockedUntil.get(id);
             if (until != null && Bukkit.getCurrentTick() >= until) {
-                lockedUntil.remove(player.getUniqueId());
+                lockedUntil.remove(id);
+                holdStart.remove(id);
+                cooldownUntil.put(id, Bukkit.getCurrentTick() + COOLDOWN_TICKS);
+                plugin.getData(player).resetMovementBaseline();
                 if (player.isOnline()) {
                     player.sendMessage(Component.text("[AC] You can move again.", NamedTextColor.GREEN));
                 }
@@ -85,6 +109,9 @@ public class MovementLock implements Listener {
 
     @EventHandler
     public void onQuit(PlayerQuitEvent e) {
-        lockedUntil.remove(e.getPlayer().getUniqueId());
+        UUID id = e.getPlayer().getUniqueId();
+        lockedUntil.remove(id);
+        holdStart.remove(id);
+        cooldownUntil.remove(id);
     }
 }

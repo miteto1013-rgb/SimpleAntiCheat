@@ -24,7 +24,10 @@ import java.util.UUID;
  * How it works: remember the tick of each pop, then watch the offhand every tick until a
  * totem appears again. That covers every way of equipping it (swap key, inventory click,
  * hotbar swap...) without having to listen for each one. If the totem is back faster than
- * ping + ~100ms, that's suspicious; two in a row triggers an alert.
+ * ping + ~100ms, that's suspicious; three in a row triggers an alert.
+ *
+ * Fast humans who keep their inventory open and swap totems with a hotkey look almost identical to the
+ * cheat, so this only ever ALERTS staff (and shows in /sus). It never holds a player or counts toward a ban.
  *
  * Limits: server ticks are 50ms steps, so timing is approximate, and a cheat configured
  * with a deliberate human-like delay can slip under this check.
@@ -87,9 +90,9 @@ public class TotemCheck implements Listener {
         long elapsedMs = elapsedTicks * 50L;
 
         if (elapsedMs <= ping + FAST_MS_ABOVE_PING) {
-            if (data.addBuffer("autototem", 1.0) > 1.5) {
+            if (data.addBuffer("autototem", 1.0) > 2.5) {
                 plugin.flag(player, "AutoTotem",
-                        "totem back in offhand " + elapsedMs + "ms after pop (ping " + ping + "ms)");
+                        "totem back in offhand " + elapsedMs + "ms after pop (ping " + ping + "ms)", false);
             }
         } else {
             data.addBuffer("autototem", -0.5);

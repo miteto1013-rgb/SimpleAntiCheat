@@ -15,9 +15,14 @@ import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
+import org.bukkit.event.block.BlockExplodeEvent;
 import org.bukkit.event.block.BlockPistonExtendEvent;
 import org.bukkit.event.block.BlockPistonRetractEvent;
 import org.bukkit.event.entity.EntityChangeBlockEvent;
+import org.bukkit.event.entity.EntityDamageByEntityEvent;
+import org.bukkit.event.entity.EntityDamageEvent;
+import org.bukkit.event.entity.EntityExplodeEvent;
+import org.bukkit.event.entity.ProjectileHitEvent;
 import org.bukkit.event.player.PlayerAnimationEvent;
 import org.bukkit.event.player.PlayerAnimationType;
 import org.bukkit.event.player.PlayerJoinEvent;
@@ -85,6 +90,9 @@ public class MovementCheck implements Listener {
     /** After a Lunge spear jab the player is flung forward by the client, so give them a moment. */
     private static final int LUNGE_GRACE_TICKS = 30;
 
+    /** A Wind Burst smash or a wind charge can send someone several seconds up and back down. */
+    private static final int WIND_BURST_GRACE_TICKS = 100;
+
     // Average speed over a window: sustained sprint-jumping averages ~0.36 b/tick (7.2 blocks/sec).
     private static final int AVG_WINDOW_TICKS = 20;
     private static final int AVG_EVAL_EVERY_TICKS = 5;
@@ -143,6 +151,45 @@ public class MovementCheck implements Listener {
         }
     }
 
+    /** A mace with Wind Burst launches its wielder (and shoves anyone close) when it hits. */
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onMaceHit(EntityDamageByEntityEvent e) {
+        if (!(e.getDamager() instanceof Player attacker)) return;
+        ItemStack item = attacker.getInventory().getItemInMainHand();
+        if (item.getType().name().equals("MACE") && hasEnchant(item, "wind_burst")) {
+            plugin.getData(attacker).exemptFor(Bukkit.getCurrentTick(), WIND_BURST_GRACE_TICKS);
+            exemptNearby(e.getEntity().getLocation(), 8, 60);
+        }
+    }
+
+    /** Wind charges (thrown or from a Breeze) launch anyone nearby. */
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onWindCharge(ProjectileHitEvent e) {
+        if (e.getEntity().getType().name().contains("WIND_CHARGE")) {
+            exemptNearby(e.getEntity().getLocation(), 8, WIND_BURST_GRACE_TICKS);
+        }
+    }
+
+    /** Explosions (TNT, crystals, anchors, creepers...) knock players around without any velocity event. */
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onEntityExplode(EntityExplodeEvent e) {
+        exemptNearby(e.getLocation(), 12, 60);
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onBlockExplode(BlockExplodeEvent e) {
+        exemptNearby(e.getBlock().getLocation(), 12, 60);
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onExplosionDamage(EntityDamageEvent e) {
+        if (!(e.getEntity() instanceof Player player)) return;
+        if (e.getCause() == EntityDamageEvent.DamageCause.ENTITY_EXPLOSION
+                || e.getCause() == EntityDamageEvent.DamageCause.BLOCK_EXPLOSION) {
+            plugin.getData(player).exemptFor(Bukkit.getCurrentTick(), 60);
+        }
+    }
+
     /** Pistons can shove blocks (and players) around. */
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onPistonExtend(BlockPistonExtendEvent e) {
@@ -170,9 +217,12 @@ public class MovementCheck implements Listener {
     }
 
     private boolean isLungeSpear(ItemStack item) {
-        if (item == null || !item.getType().name().endsWith("_SPEAR")) return false;
+        return item != null && item.getType().name().endsWith("_SPEAR") && hasEnchant(item, "lunge");
+    }
+
+    private boolean hasEnchant(ItemStack item, String key) {
         for (Enchantment enchantment : item.getEnchantments().keySet()) {
-            if (enchantment.getKey().getKey().equals("lunge")) return true;
+            if (enchantment.getKey().getKey().equals(key)) return true;
         }
         return false;
     }
@@ -256,7 +306,7 @@ public class MovementCheck implements Listener {
             String info = "";
 
             double rise = to.getY() - data.lastGroundY;
-            if (rise > MAX_JUMP_RISE) {
+            if (rise > MAX_JUMP_RISE && dy > -0.06) {   // only while rising or hovering; coming back down is fine
                 // Higher above the ground than any jump can take you: high jump, flight, or a long hover.
                 violation = true;
                 weight = 2.0;

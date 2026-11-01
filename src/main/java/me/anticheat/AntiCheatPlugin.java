@@ -24,11 +24,14 @@ public class AntiCheatPlugin extends JavaPlugin implements Listener {
     // ------------------------------------------------------------------
 
     /**
-     * When a player is flagged they can't move. The hold is renewed by every flag and lets go
-     * LOCK_SECONDS after the last one. Set to false to turn it off.
+     * When a player is flagged by a MOVEMENT check they can't move. The hold is renewed by every movement flag
+     * and lets go LOCK_SECONDS after the last one. Combat checks, AutoTotem, crystals, anchors, bows and X-ray
+     * never hold anyone. Set LOCK_ON_FLAG to false to turn the hold off completely.
      */
     private static final boolean LOCK_ON_FLAG = true;
     private static final int LOCK_SECONDS = 3;
+    private static final Set<String> MOVEMENT_CHECKS =
+            Set.of("Fly", "Speed", "Jesus", "Step", "Phase", "BoatFly", "BoatNoClip");
 
     // ------------------------------------------------------------------
     // Automatic bans. Designed so one glitch can never get anyone banned.
@@ -151,7 +154,7 @@ public class AntiCheatPlugin extends JavaPlugin implements Listener {
         int vl = playerData.addViolation(check);
         int tick = Bukkit.getCurrentTick();
 
-        if (LOCK_ON_FLAG && takeAction) {
+        if (LOCK_ON_FLAG && takeAction && MOVEMENT_CHECKS.contains(check)) {
             lock.lock(player, LOCK_SECONDS);
         }
 

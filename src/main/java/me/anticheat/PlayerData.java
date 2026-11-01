@@ -121,6 +121,20 @@ public class PlayerData {
         return new HashMap<>(flagLog);
     }
 
+    /**
+     * Forgets everything we knew about how the player was moving. Used when a hold ends: while held, the
+     * player's position was frozen but their client kept falling, so the old numbers no longer mean anything.
+     */
+    public void resetMovementBaseline() {
+        lastGroundY = Double.NaN;
+        airTicks = 5;
+        lastHorizontal = -1;
+        stateStreak = 1;
+        speedSamples.clear();
+        speedWindowStart = -1;
+        buffers.clear();
+    }
+
     /** Rate-limits chat alerts so a single cheater doesn't flood the chat. */
     public boolean canAlert(String check, int nowTick, int cooldownTicks) {
         Integer last = lastAlert.get(check);
